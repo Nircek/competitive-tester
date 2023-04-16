@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 import gi
-gi.require_version('Gtk', '3.0')
+gi.require_version("Gtk", "3.0")  # nopep8
 from gi.repository import Gtk, GLib
-from time import sleep, time
+
 from concurrent.futures import ThreadPoolExecutor
+
+from time import sleep
+from random import random
 
 
 class SystemRepo:
@@ -11,84 +14,86 @@ class SystemRepo:
         self.tpe = tpe
 
     def _test(self, prog, test):
-        sleep(2)
-        return time() % 3
+        res = random() ** 2 * 3
+        if res > 2:
+            res = None
+        sleep(2 if res is None else res)
+        return "TLE" if res is None else f'{res:.2f}'
 
     def test(self, prog, test, cb):
-        self.tpe.submit(self._test, prog, test).add_done_callback(lambda x: GLib.idle_add(lambda: cb(x)))
+        fut = self.tpe.submit(self._test, prog, test)
+        fut.add_done_callback(lambda x: GLib.idle_add(lambda: cb(x.result())))
+
 
 class TesterApp(Gtk.Window):
-    def update(self, x, y):
-        self.system.test(x, y, lambda rf: self.grid.get_child_at(x, y).set_label(f'{x},{y}: {rf.result()}'))
+    def set_label(self, x, y, label):
+        self.grid.get_child_at(x, y).set_label(label)
 
-    def event(self, x, y, b):
+    def run_test(self, x, y):
+        self.system.test(x, y, lambda r: self.set_label(x, y, r))
+
+    def click(self, x, y):
         if x == -1:
-            for col in range(self.cols):
-                self.update(col, y)
+            for col, _ in enumerate(self.progs):
+                self.run_test(col, y)
         elif y == -1:
-            for row in range(self.rows):
-                self.update(x, row)
+            for row, _ in enumerate(self.tests):
+                self.run_test(x, row)
         else:
-            self.update(x, y)
+            self.run_test(x, y)
 
     def detach(self, x, y):
         self.grid.remove(self.grid.get_child_at(x, y))
 
-    def attach(self, x, y, label=''):
+    def attach(self, x, y, label=""):
         button = Gtk.Button(label=label)
-        button.connect("clicked", lambda b: self.event(x, y, b))
+        button.connect("clicked", lambda _: self.click(x, y))
         self.grid.attach(button, x, y, 1, 1)
+
+    def entry_init(self, col=False):
+        entry = Gtk.Entry()
+        entry.connect("activate", self.add_col if col else self.add_row)
+        entry.set_placeholder_text("test" if col else "prog")
+        entry.set_width_chars(8 if col else 4)
+        self.grid.attach(
+            entry, len(self.progs) if col else -1, -
+            1 if col else len(self.tests), 1, 1
+        )
+        return entry
 
     def __init__(self, system):
         Gtk.Window.__init__(self, title="Table")
         self.system = system
-        self.cols = 0
-        self.rows = 0
+        self.progs = []
+        self.tests = []
 
-        self.grid = Gtk.Grid(column_spacing=1, row_spacing=1)
+        self.grid = Gtk.Grid(column_homogeneous=True,
+                             column_spacing=1, row_spacing=1)
         self.add(self.grid)
 
-        for col in range(self.cols):
-            self.attach(col, -1, f'C{col}')
-        for row in range(self.rows):
-            self.attach(-1, row, f'R{row}')
+        self.entry_init(False)
+        self.entry_init(True)
 
-        for col in range(self.cols):
-            for row in range(self.rows):
-                self.attach(col, row, f'{col},{row}')
-
-        row_entry = Gtk.Entry()
-        row_entry.connect("activate", self.add_row)
-        self.grid.attach(row_entry, -1, self.rows, 1, 1)
-        col_entry = Gtk.Entry()
-        col_entry.connect("activate", self.add_col)
-        self.grid.attach(col_entry, self.cols, -1, 1, 1)
-
-    def add_row(self, button):
-        self.detach(-1, self.rows)
-        self.attach(-1, self.rows, f'R{self.rows}')
-        for col in range(self.cols):
-            self.attach(col, self.rows,
-                        f'{col},{self.rows}')
-        self.rows += 1
-        row_entry = Gtk.Entry()
-        row_entry.connect("activate", self.add_row)
-        self.grid.attach(row_entry, -1, self.rows, 1, 1)
+    def add_row(self, entry):
+        test = entry.get_text()
+        self.detach(-1, len(self.tests))
+        self.attach(-1, len(self.tests), test)
+        for col, _ in enumerate(self.progs):
+            self.attach(col, len(self.tests), "-")
+        self.tests += [test]
+        self.set_focus(self.entry_init(False))
         self.grid.show_all()
-        self.set_focus(row_entry)
 
-    def add_col(self, button):
-        self.detach(self.cols, -1)
-        self.attach(self.cols, -1, f'C{self.cols}')
-        for row in range(self.rows):
-            self.attach(self.cols, row,
-                        f'{self.cols},{row}')
-        self.cols += 1
-        col_entry = Gtk.Entry()
-        col_entry.connect("activate", self.add_col)
-        self.grid.attach(col_entry, self.cols, -1, 1, 1)
+    def add_col(self, entry):
+        prog = entry.get_text()
+        self.detach(len(self.progs), -1)
+        self.attach(len(self.progs), -1, prog)
+        for row, _ in enumerate(self.tests):
+            self.attach(len(self.progs), row, "-")
+        self.progs += [prog]
+        self.set_focus(self.entry_init(True))
         self.grid.show_all()
-        self.set_focus(col_entry)
+
 
 with ThreadPoolExecutor(max_workers=1) as executor:
     table_window = TesterApp(SystemRepo(executor))
